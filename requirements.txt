@@ -1,0 +1,6 @@
+Flask
+Flask-PyMongo
+Flask-Cors
+Flask-SocketIO
+Werkzeug
+gunicorn
