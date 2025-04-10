@@ -2,6 +2,7 @@ from flask import Flask
 from flask_cors import CORS
 from api.auth import auth_blueprint, init_mongo
 from service.unique_key_service import key_blueprint, init_mongo as init_mongo_key
+from api.connections import connections_bp
 import os
 
 def create_app():
@@ -16,6 +17,7 @@ def create_app():
 
     app.register_blueprint(auth_blueprint, url_prefix='/api')
     app.register_blueprint(key_blueprint, url_prefix='/api')
+    app.register_blueprint(connections_bp, url_prefix='/api')
 
     return app
 
