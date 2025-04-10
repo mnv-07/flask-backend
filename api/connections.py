@@ -1,7 +1,5 @@
 from flask import Blueprint, request, jsonify, current_app
-from flask_jwt_extended import jwt_required, get_jwt_identity
 from flask_cors import cross_origin
-from utils.security import verify_unique_key
 import random
 import string
 
@@ -14,11 +12,9 @@ def generate_unique_key():
     return key
 
 @connections_bp.route('/generate_key', methods=['POST'])
-@jwt_required()
 @cross_origin()
 def generate_key():
     try:
-        current_user_email = get_jwt_identity()
         data = request.get_json()
         
         if not data or 'email' not in data:
@@ -28,7 +24,7 @@ def generate_key():
         new_key = generate_unique_key()
         
         # Update user's unique key
-        user = current_app.user_service.get_user_by_email(current_user_email)
+        user = current_app.user_service.get_user_by_email(data['email'])
         if user:
             user.unique_key = new_key
             current_app.user_service.update_user(user)
@@ -43,17 +39,16 @@ def generate_key():
         return jsonify({'error': str(e)}), 500
 
 @connections_bp.route('/send-request', methods=['POST'])
-@jwt_required()
 @cross_origin()
 def send_connection_request():
     try:
-        current_user_email = get_jwt_identity()
         data = request.get_json()
         
-        if not data or 'unique_key' not in data:
-            return jsonify({'error': 'Unique key is required'}), 400
+        if not data or 'unique_key' not in data or 'requester_email' not in data:
+            return jsonify({'error': 'Unique key and requester email are required'}), 400
         
         target_unique_key = data['unique_key']
+        requester_email = data['requester_email']
         
         # Find user with matching unique key
         target_user = current_app.user_service.find_user_by_unique_key(target_unique_key)
@@ -65,11 +60,11 @@ def send_connection_request():
             return jsonify({'error': 'User is already connected to someone else'}), 400
         
         # Check if already has a pending request from this user
-        if current_user_email in target_user.pending_requests:
+        if requester_email in target_user.pending_requests:
             return jsonify({'error': 'Connection request already sent'}), 400
         
         # Add connection request
-        target_user.add_pending_request(current_user_email)
+        target_user.add_pending_request(requester_email)
         current_app.user_service.update_user(target_user)
         
         return jsonify({
@@ -80,18 +75,18 @@ def send_connection_request():
         return jsonify({'error': str(e)}), 500
 
 @connections_bp.route('/accept-request', methods=['POST'])
-@jwt_required()
 @cross_origin()
 def accept_connection_request():
     try:
-        current_user_email = get_jwt_identity()
         data = request.get_json()
         
-        if not data or 'requester_email' not in data:
-            return jsonify({'error': 'Requester email is required'}), 400
+        if not data or 'requester_email' not in data or 'accepter_email' not in data:
+            return jsonify({'error': 'Requester email and accepter email are required'}), 400
         
         requester_email = data['requester_email']
-        current_user = current_app.user_service.get_user_by_email(current_user_email)
+        accepter_email = data['accepter_email']
+        
+        current_user = current_app.user_service.get_user_by_email(accepter_email)
         
         if current_user.is_connected:
             return jsonify({'error': 'You are already connected to someone else'}), 400
@@ -102,7 +97,7 @@ def accept_connection_request():
             if requester.is_connected:
                 return jsonify({'error': 'Requester is already connected to someone else'}), 400
                 
-            requester.connected_to = current_user_email
+            requester.connected_to = accepter_email
             requester.is_connected = True
             
             current_app.user_service.update_user(current_user)
@@ -118,11 +113,15 @@ def accept_connection_request():
         return jsonify({'error': str(e)}), 500
 
 @connections_bp.route('/disconnect', methods=['POST'])
-@jwt_required()
 @cross_origin()
 def disconnect():
     try:
-        current_user_email = get_jwt_identity()
+        data = request.get_json()
+        
+        if not data or 'email' not in data:
+            return jsonify({'error': 'Email is required'}), 400
+            
+        current_user_email = data['email']
         current_user = current_app.user_service.get_user_by_email(current_user_email)
         
         if not current_user.is_connected:
@@ -145,12 +144,16 @@ def disconnect():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-@connections_bp.route('/status', methods=['GET'])
-@jwt_required()
+@connections_bp.route('/status', methods=['POST'])
 @cross_origin()
 def get_connection_status():
     try:
-        current_user_email = get_jwt_identity()
+        data = request.get_json()
+        
+        if not data or 'email' not in data:
+            return jsonify({'error': 'Email is required'}), 400
+            
+        current_user_email = data['email']
         current_user = current_app.user_service.get_user_by_email(current_user_email)
         
         return jsonify({
