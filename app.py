@@ -7,7 +7,7 @@ import os
 def create_app():
     app = Flask(__name__)
     
-    app.config['MONGO_URI'] = os.getenv("MONGO_URI", "mongodb://mongo:aZojmnXeoZFdwRDQDpkSMqxVhloqHJaW@centerbeam.proxy.rlwy.net:17500/UserAuth?authSource=admin")
+    app.config['MONGO_URI'] = os.getenv("MONGO_URI", "mongodb://mongo:NWLxNoJYJvLoYssKCKYUoXSazszGcPAM@caboose.proxy.rlwy.net:25575/UserAuth?authSource=admin")
 
     init_mongo(app)
     init_mongo_key(app)
