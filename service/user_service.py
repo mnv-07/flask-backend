@@ -1,5 +1,5 @@
 from flask_pymongo import PyMongo
-from model.user import User
+from flask_backend.model.user import User
 from bson.objectid import ObjectId
 
 class UserService:
@@ -19,7 +19,7 @@ class UserService:
         if user_data:
             return User(
                 email=user_data['email'],
-                password_hash=user_data['password_hash'],
+                password_hash=user_data.get('password_hash', ''),
                 unique_key=user_data.get('unique_key'),
                 connected_to=user_data.get('connected_to'),
                 pending_requests=user_data.get('pending_requests', []),
@@ -36,7 +36,7 @@ class UserService:
         if user_data:
             return User(
                 email=user_data['email'],
-                password_hash=user_data['password_hash'],
+                password_hash=user_data.get('password_hash', ''),
                 unique_key=user_data.get('unique_key'),
                 connected_to=user_data.get('connected_to'),
                 pending_requests=user_data.get('pending_requests', []),
