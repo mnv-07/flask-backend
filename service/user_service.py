@@ -1,5 +1,5 @@
 from flask_pymongo import PyMongo
-from flask_backend.model.user import User
+from model.user import User
 from bson.objectid import ObjectId
 
 class UserService:
