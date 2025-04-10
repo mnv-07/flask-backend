@@ -1,13 +1,11 @@
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, current_app
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from flask_cors import cross_origin
-from service.user_service import UserService
 from utils.security import verify_unique_key
 import random
 import string
 
 connections_bp = Blueprint('connections', __name__)
-user_service = UserService()
 
 def generate_unique_key():
     """Generate a 10-digit unique key"""
@@ -30,10 +28,10 @@ def generate_key():
         new_key = generate_unique_key()
         
         # Update user's unique key
-        user = user_service.get_user_by_email(current_user_email)
+        user = current_app.user_service.get_user_by_email(current_user_email)
         if user:
             user.unique_key = new_key
-            user_service.update_user(user)
+            current_app.user_service.update_user(user)
             
             return jsonify({
                 'message': 'Key generated successfully',
@@ -58,7 +56,7 @@ def send_connection_request():
         target_unique_key = data['unique_key']
         
         # Find user with matching unique key
-        target_user = user_service.find_user_by_unique_key(target_unique_key)
+        target_user = current_app.user_service.find_user_by_unique_key(target_unique_key)
         if not target_user:
             return jsonify({'error': 'No user found with this unique key'}), 404
         
@@ -72,7 +70,7 @@ def send_connection_request():
         
         # Add connection request
         target_user.add_pending_request(current_user_email)
-        user_service.update_user(target_user)
+        current_app.user_service.update_user(target_user)
         
         return jsonify({
             'message': 'Connection request sent successfully',
@@ -93,22 +91,22 @@ def accept_connection_request():
             return jsonify({'error': 'Requester email is required'}), 400
         
         requester_email = data['requester_email']
-        current_user = user_service.get_user_by_email(current_user_email)
+        current_user = current_app.user_service.get_user_by_email(current_user_email)
         
         if current_user.is_connected:
             return jsonify({'error': 'You are already connected to someone else'}), 400
         
         if current_user.accept_connection(requester_email):
             # Update both users' connection status
-            requester = user_service.get_user_by_email(requester_email)
+            requester = current_app.user_service.get_user_by_email(requester_email)
             if requester.is_connected:
                 return jsonify({'error': 'Requester is already connected to someone else'}), 400
                 
             requester.connected_to = current_user_email
             requester.is_connected = True
             
-            user_service.update_user(current_user)
-            user_service.update_user(requester)
+            current_app.user_service.update_user(current_user)
+            current_app.user_service.update_user(requester)
             
             return jsonify({
                 'message': 'Connection established successfully',
@@ -125,20 +123,20 @@ def accept_connection_request():
 def disconnect():
     try:
         current_user_email = get_jwt_identity()
-        current_user = user_service.get_user_by_email(current_user_email)
+        current_user = current_app.user_service.get_user_by_email(current_user_email)
         
         if not current_user.is_connected:
             return jsonify({'error': 'No active connection'}), 400
         
         connected_user_email = current_user.connected_to
-        connected_user = user_service.get_user_by_email(connected_user_email)
+        connected_user = current_app.user_service.get_user_by_email(connected_user_email)
         
         # Disconnect both users
         current_user.disconnect()
         connected_user.disconnect()
         
-        user_service.update_user(current_user)
-        user_service.update_user(connected_user)
+        current_app.user_service.update_user(current_user)
+        current_app.user_service.update_user(connected_user)
         
         return jsonify({
             'message': 'Disconnected successfully',
@@ -153,7 +151,7 @@ def disconnect():
 def get_connection_status():
     try:
         current_user_email = get_jwt_identity()
-        current_user = user_service.get_user_by_email(current_user_email)
+        current_user = current_app.user_service.get_user_by_email(current_user_email)
         
         return jsonify({
             'is_connected': current_user.is_connected,
