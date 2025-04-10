@@ -3,9 +3,17 @@ import string
 from flask import Blueprint, request, jsonify
 from flask_pymongo import PyMongo
 from werkzeug.security import generate_password_hash, check_password_hash
+import base64
+from cryptography.fernet import Fernet
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
 key_blueprint = Blueprint('key', __name__)
 mongo = None  # Global MongoDB connection
+
+# Encryption key - in production, this should be stored securely
+ENCRYPTION_KEY = b'your-secret-key-here'  # Replace with a secure key
+SALT = b'your-salt-here'  # Replace with a secure salt
 
 def init_mongo(app):
     """Initialize MongoDB connection with Flask app."""
@@ -16,6 +24,30 @@ def generate_unique_key():
     """Generate a random 10-digit unique key."""
     return ''.join(random.choices(string.digits, k=10))
 
+def encrypt_key(key):
+    """Encrypt the unique key before storing."""
+    kdf = PBKDF2HMAC(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=SALT,
+        iterations=100000,
+    )
+    key = base64.urlsafe_b64encode(kdf.derive(ENCRYPTION_KEY))
+    f = Fernet(key)
+    return f.encrypt(key.encode()).decode()
+
+def decrypt_key(encrypted_key):
+    """Decrypt the unique key when retrieving."""
+    kdf = PBKDF2HMAC(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=SALT,
+        iterations=100000,
+    )
+    key = base64.urlsafe_b64encode(kdf.derive(ENCRYPTION_KEY))
+    f = Fernet(key)
+    return f.decrypt(encrypted_key.encode()).decode()
+
 @key_blueprint.route('/generate_key', methods=['POST'])
 def generate_key():
     """Generate and store a 10-digit key for a user upon login."""
@@ -25,17 +57,18 @@ def generate_key():
 
     data = request.get_json()
     email = data.get('email')
-    name = data.get('name')  # Add name parameter
+    name = data.get('name')
 
     if not email:
         return jsonify({"message": "Email is required"}), 400
 
     unique_key = generate_unique_key()
+    encrypted_key = encrypt_key(unique_key)
 
     try:
         mongo.db.users.update_one(
             {"email": email},
-            {"$set": {"unique_key": unique_key, "name": name}, "$setOnInsert": {"connected_users": [], "pending_requests": []}},
+            {"$set": {"unique_key": encrypted_key, "name": name}, "$setOnInsert": {"connected_users": [], "pending_requests": []}},
             upsert=True
         )
         return jsonify({"message": "Key generated successfully", "key": unique_key}), 200
@@ -53,8 +86,8 @@ def connect_users():
         return jsonify({"message": "Both keys are required"}), 400
 
     # Find users by their keys
-    user1 = mongo.db.users.find_one({"unique_key": user1_key})
-    user2 = mongo.db.users.find_one({"unique_key": user2_key})
+    user1 = mongo.db.users.find_one({"unique_key": encrypt_key(user1_key)})
+    user2 = mongo.db.users.find_one({"unique_key": encrypt_key(user2_key)})
 
     if not user1 or not user2:
         return jsonify({"message": "Invalid key(s)"}), 401
@@ -81,7 +114,7 @@ def connect_users():
 @key_blueprint.route('/pending_requests/<user_key>', methods=['GET'])
 def get_pending_requests(user_key):
     """Fetch pending connection requests for a user."""
-    user = mongo.db.users.find_one({"unique_key": user_key})
+    user = mongo.db.users.find_one({"unique_key": encrypt_key(user_key)})
     if not user:
         return jsonify({"message": "User not found"}), 404
 
@@ -93,7 +126,7 @@ def get_pending_requests(user_key):
         if requester:
             requests.append({
                 "requester_email": email,
-                "requester_key": requester.get("unique_key", ""),
+                "requester_key": decrypt_key(requester.get("unique_key", "")),
                 "requester_name": requester.get("name", "Unknown")
             })
 
@@ -109,8 +142,8 @@ def accept_request():
     if not user_key or not requester_key:
         return jsonify({"message": "Both keys are required"}), 400
 
-    user = mongo.db.users.find_one({"unique_key": user_key})
-    requester = mongo.db.users.find_one({"unique_key": requester_key})
+    user = mongo.db.users.find_one({"unique_key": encrypt_key(user_key)})
+    requester = mongo.db.users.find_one({"unique_key": encrypt_key(requester_key)})
 
     if not user or not requester:
         return jsonify({"message": "Invalid key(s)"}), 401
@@ -144,8 +177,8 @@ def reject_request():
     if not user_key or not requester_key:
         return jsonify({"message": "Both keys are required"}), 400
 
-    user = mongo.db.users.find_one({"unique_key": user_key})
-    requester = mongo.db.users.find_one({"unique_key": requester_key})
+    user = mongo.db.users.find_one({"unique_key": encrypt_key(user_key)})
+    requester = mongo.db.users.find_one({"unique_key": encrypt_key(requester_key)})
 
     if not user or not requester:
         return jsonify({"message": "Invalid key(s)"}), 401
@@ -161,11 +194,74 @@ def reject_request():
 
     return jsonify({"message": "Connection request rejected!"}), 200
 
+@key_blueprint.route('/disconnect', methods=['POST'])
+def disconnect():
+    """Disconnect from a user."""
+    data = request.get_json()
+    user_key = data.get("user_key")
+    other_key = data.get("other_key")
+
+    if not user_key or not other_key:
+        return jsonify({"message": "Both keys are required"}), 400
+
+    user = mongo.db.users.find_one({"unique_key": encrypt_key(user_key)})
+    other = mongo.db.users.find_one({"unique_key": encrypt_key(other_key)})
+
+    if not user or not other:
+        return jsonify({"message": "Invalid key(s)"}), 401
+
+    user_email = user["email"]
+    other_email = other["email"]
+
+    # Remove from both users' connected lists
+    mongo.db.users.update_one(
+        {"email": user_email},
+        {"$pull": {"connected_users": other_email}}
+    )
+
+    mongo.db.users.update_one(
+        {"email": other_email},
+        {"$pull": {"connected_users": user_email}}
+    )
+
+    return jsonify({"message": "Disconnected successfully!"}), 200
+
+@key_blueprint.route('/logout', methods=['POST'])
+def logout():
+    """Handle user logout by disconnecting all connections."""
+    data = request.get_json()
+    user_key = data.get("user_key")
+
+    if not user_key:
+        return jsonify({"message": "User key is required"}), 400
+
+    user = mongo.db.users.find_one({"unique_key": encrypt_key(user_key)})
+    if not user:
+        return jsonify({"message": "User not found"}), 404
+
+    user_email = user["email"]
+    connected_emails = user.get("connected_users", [])
+
+    # Remove user from all connected users' lists
+    for email in connected_emails:
+        mongo.db.users.update_one(
+            {"email": email},
+            {"$pull": {"connected_users": user_email}}
+        )
+
+    # Clear user's connected users list
+    mongo.db.users.update_one(
+        {"email": user_email},
+        {"$set": {"connected_users": []}}
+    )
+
+    return jsonify({"message": "Logged out and disconnected from all users"}), 200
+
 @key_blueprint.route('/check_connection/<user1_key>/<user2_key>', methods=['GET'])
 def check_connection(user1_key, user2_key):
     """Check if two users are connected."""
-    user1 = mongo.db.users.find_one({"unique_key": user1_key})
-    user2 = mongo.db.users.find_one({"unique_key": user2_key})
+    user1 = mongo.db.users.find_one({"unique_key": encrypt_key(user1_key)})
+    user2 = mongo.db.users.find_one({"unique_key": encrypt_key(user2_key)})
 
     if not user1 or not user2:
         return jsonify({"message": "Invalid key(s)", "connected": False}), 401
@@ -179,7 +275,7 @@ def check_connection(user1_key, user2_key):
 @key_blueprint.route('/get_connected_users/<user_key>', methods=['GET'])
 def get_connected_users(user_key):
     """Get list of connected users with their details."""
-    user = mongo.db.users.find_one({"unique_key": user_key})
+    user = mongo.db.users.find_one({"unique_key": encrypt_key(user_key)})
     if not user:
         return jsonify({"message": "User not found"}), 404
 
@@ -192,7 +288,7 @@ def get_connected_users(user_key):
             connected_users.append({
                 "email": email,
                 "name": connected_user.get("name", "Unknown"),
-                "key": connected_user.get("unique_key", "")
+                "key": decrypt_key(connected_user.get("unique_key", ""))
             })
 
     return jsonify({"connected_users": connected_users}), 200
