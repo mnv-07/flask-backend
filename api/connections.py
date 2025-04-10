@@ -1,8 +1,8 @@
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from flask_cors import cross_origin
-# from ..service.user_service import UserService
-# from ..utils.security import verify_unique_key
+from flask_backend.service.user_service import UserService
+from flask_backend.utils.security import verify_unique_key
 
 connections_bp = Blueprint('connections', __name__)
 user_service = UserService()
