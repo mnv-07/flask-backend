@@ -2,6 +2,7 @@ Flask
 Flask-PyMongo
 Flask-Cors
 Flask-SocketIO
+Flask-JWT-Extended
 Werkzeug
 gunicorn
 cryptography
@@ -12,3 +13,4 @@ eventlet
 python-engineio
 python-socketio
 requests
+PyJWT
