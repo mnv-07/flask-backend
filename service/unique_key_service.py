@@ -30,12 +30,11 @@ def generate_key():
         return jsonify({"message": "Email is required"}), 400
 
     unique_key = generate_unique_key()
-    hashed_key = generate_password_hash(unique_key)
 
     try:
         mongo.db.users.update_one(
             {"email": email},
-            {"$set": {"unique_key": hashed_key}, "$setOnInsert": {"connected_users": [], "pending_requests": []}},
+            {"$set": {"unique_key": unique_key}, "$setOnInsert": {"connected_users": [], "pending_requests": []}},
             upsert=True
         )
         return jsonify({"message": "Key generated successfully", "key": unique_key}), 200
