@@ -1,7 +1,7 @@
 from flask import Flask, jsonify
 from flask_cors import CORS
-from api.auth import auth_blueprint, init_mongo
-from service.unique_key_service import key_blueprint, init_mongo as init_mongo_key
+from api.auth import auth_blueprint, init_mongo as init_auth_mongo
+from service.unique_key_service import key_blueprint, init_mongo as init_key_mongo
 import os
 import logging
 from werkzeug.exceptions import HTTPException
@@ -14,14 +14,14 @@ def create_app():
     """Initialize Flask app and configure MongoDB."""
     app = Flask(__name__)
 
-    # Use Railway MongoDB URI from Environment Variables (More Secure)
+    # Configure MongoDB
     mongo_uri = os.getenv("MONGO_URI", "mongodb://mongo:yfUaIbyIuazrGmhbDHeSNfsekCNPrGkc@caboose.proxy.rlwy.net:29236/UserAuth?authSource=admin")
     app.config['MONGO_URI'] = mongo_uri
 
     try:
         # Initialize MongoDB connections
-        init_mongo(app)
-        init_mongo_key(app)
+        init_auth_mongo(app)
+        init_key_mongo(app)
         logger.info("MongoDB connections initialized successfully")
     except Exception as e:
         logger.error(f"Failed to initialize MongoDB: {str(e)}")
@@ -41,7 +41,7 @@ def create_app():
         if isinstance(e, HTTPException):
             code = e.code
         logger.error(f"Error occurred: {str(e)}")
-        return jsonify(error=str(e)), code
+        return jsonify({"error": str(e)}), code
 
     return app
 
