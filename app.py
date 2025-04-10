@@ -3,7 +3,7 @@ from flask_cors import CORS
 from api.auth import auth_blueprint, init_mongo
 from service.unique_key_service import key_blueprint, init_mongo as init_mongo_key
 from api.connections import connections_bp
-from user_service import UserService
+from service.user_service import UserService
 import os
 
 def create_app():
