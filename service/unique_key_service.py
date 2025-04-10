@@ -25,6 +25,7 @@ def generate_key():
 
     data = request.get_json()
     email = data.get('email')
+    name = data.get('name')  # Add name parameter
 
     if not email:
         return jsonify({"message": "Email is required"}), 400
@@ -34,7 +35,7 @@ def generate_key():
     try:
         mongo.db.users.update_one(
             {"email": email},
-            {"$set": {"unique_key": unique_key}, "$setOnInsert": {"connected_users": [], "pending_requests": []}},
+            {"$set": {"unique_key": unique_key, "name": name}, "$setOnInsert": {"connected_users": [], "pending_requests": []}},
             upsert=True
         )
         return jsonify({"message": "Key generated successfully", "key": unique_key}), 200
@@ -65,6 +66,10 @@ def connect_users():
     if user2_email in user1.get("connected_users", []):
         return jsonify({"message": "Users are already connected"}), 200
 
+    # Check if request already exists
+    if user1_email in user2.get("pending_requests", []):
+        return jsonify({"message": "Request already sent"}), 200
+
     # Add to pending requests
     mongo.db.users.update_one(
         {"email": user2_email},
@@ -88,7 +93,8 @@ def get_pending_requests(user_key):
         if requester:
             requests.append({
                 "requester_email": email,
-                "requester_key": requester.get("unique_key", "")
+                "requester_key": requester.get("unique_key", ""),
+                "requester_name": requester.get("name", "Unknown")
             })
 
     return jsonify({"requests": requests}), 200
@@ -169,3 +175,24 @@ def check_connection(user1_key, user2_key):
 
     connected = user2_email in user1.get("connected_users", [])
     return jsonify({"connected": connected}), 200
+
+@key_blueprint.route('/get_connected_users/<user_key>', methods=['GET'])
+def get_connected_users(user_key):
+    """Get list of connected users with their details."""
+    user = mongo.db.users.find_one({"unique_key": user_key})
+    if not user:
+        return jsonify({"message": "User not found"}), 404
+
+    connected_emails = user.get("connected_users", [])
+    connected_users = []
+    
+    for email in connected_emails:
+        connected_user = mongo.db.users.find_one({"email": email})
+        if connected_user:
+            connected_users.append({
+                "email": email,
+                "name": connected_user.get("name", "Unknown"),
+                "key": connected_user.get("unique_key", "")
+            })
+
+    return jsonify({"connected_users": connected_users}), 200
