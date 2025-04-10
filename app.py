@@ -8,13 +8,27 @@ import os
 def create_app():
     app = Flask(__name__)
     
+    # Configure MongoDB URI
     app.config['MONGO_URI'] = os.getenv("MONGO_URI", "mongodb://mongo:NWLxNoJYJvLoYssKCKYUoXSazszGcPAM@caboose.proxy.rlwy.net:25575/UserAuth?authSource=admin")
-
+    
+    # Configure JWT
+    app.config['JWT_SECRET_KEY'] = os.getenv('JWT_SECRET_KEY', 'your-secret-key')
+    app.config['JWT_ACCESS_TOKEN_EXPIRES'] = 3600  # 1 hour
+    
+    # Initialize MongoDB
     init_mongo(app)
     init_mongo_key(app)
 
-    CORS(app, resources={r"/*": {"origins": "*"}})
+    # Configure CORS
+    CORS(app, resources={
+        r"/*": {
+            "origins": ["*"],
+            "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+            "allow_headers": ["Content-Type", "Authorization"]
+        }
+    })
 
+    # Register blueprints
     app.register_blueprint(auth_blueprint, url_prefix='/api')
     app.register_blueprint(key_blueprint, url_prefix='/api')
     app.register_blueprint(connections_bp, url_prefix='/api')
@@ -24,4 +38,5 @@ def create_app():
 app = create_app()
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000, use_reloader=False)
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=False)
