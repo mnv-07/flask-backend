@@ -1,8 +1,8 @@
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from flask_cors import cross_origin
-from service.user_service import UserService
-from utils.security import verify_unique_key
+from flask_backend.service.user_service import UserService
+from flask_backend.utils.security import verify_unique_key
 
 connections_bp = Blueprint('connections', __name__)
 user_service = UserService()
@@ -28,6 +28,10 @@ def send_connection_request():
         # Check if already connected
         if target_user.is_connected:
             return jsonify({'error': 'User is already connected to someone else'}), 400
+        
+        # Check if already has a pending request from this user
+        if current_user_email in target_user.pending_requests:
+            return jsonify({'error': 'Connection request already sent'}), 400
         
         # Add connection request
         target_user.add_pending_request(current_user_email)
