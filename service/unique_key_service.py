@@ -2,30 +2,38 @@ import random
 import string
 from flask import Blueprint, request, jsonify
 from flask_pymongo import PyMongo
-from werkzeug.security import generate_password_hash, check_password_hash
 import base64
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+import os
+import logging
 
 key_blueprint = Blueprint('key', __name__)
+logger = logging.getLogger(__name__)
+
 mongo = None  # Global MongoDB connection
 
-# Encryption key - in production, this should be stored securely
-ENCRYPTION_KEY = b'your-secret-key-here'  # Replace with a secure key
-SALT = b'your-salt-here'  # Replace with a secure salt
+# Get encryption key and salt from environment variables
+ENCRYPTION_KEY = os.getenv('ENCRYPTION_KEY', 'your-secret-key-here').encode()
+SALT = os.getenv('SALT', 'your-salt-here').encode()
 
 def init_mongo(app):
     """Initialize MongoDB connection with Flask app."""
     global mongo
-    mongo = PyMongo(app)
+    try:
+        mongo = PyMongo(app)
+        logger.info("MongoDB initialized successfully for key service")
+    except Exception as e:
+        logger.error(f"Failed to initialize MongoDB for key service: {str(e)}")
+        raise
 
 def generate_unique_key():
     """Generate a random 10-digit unique key."""
     return ''.join(random.choices(string.digits, k=10))
 
-def encrypt_key(key):
-    """Encrypt the unique key before storing."""
+def get_fernet():
+    """Create a Fernet instance with the derived key."""
     kdf = PBKDF2HMAC(
         algorithm=hashes.SHA256(),
         length=32,
@@ -33,262 +41,205 @@ def encrypt_key(key):
         iterations=100000,
     )
     key = base64.urlsafe_b64encode(kdf.derive(ENCRYPTION_KEY))
-    f = Fernet(key)
-    return f.encrypt(key.encode()).decode()
+    return Fernet(key)
+
+def encrypt_key(key):
+    """Encrypt the unique key before storing."""
+    try:
+        f = get_fernet()
+        return f.encrypt(key.encode()).decode()
+    except Exception as e:
+        logger.error(f"Encryption error: {str(e)}")
+        raise
 
 def decrypt_key(encrypted_key):
     """Decrypt the unique key when retrieving."""
-    kdf = PBKDF2HMAC(
-        algorithm=hashes.SHA256(),
-        length=32,
-        salt=SALT,
-        iterations=100000,
-    )
-    key = base64.urlsafe_b64encode(kdf.derive(ENCRYPTION_KEY))
-    f = Fernet(key)
-    return f.decrypt(encrypted_key.encode()).decode()
+    try:
+        f = get_fernet()
+        return f.decrypt(encrypted_key.encode()).decode()
+    except Exception as e:
+        logger.error(f"Decryption error: {str(e)}")
+        raise
 
 @key_blueprint.route('/generate_key', methods=['POST'])
 def generate_key():
     """Generate and store a 10-digit key for a user upon login."""
-    global mongo
-    if mongo is None:
-        return jsonify({"message": "Database not initialized"}), 500
-
-    data = request.get_json()
-    email = data.get('email')
-    name = data.get('name')
-
-    if not email:
-        return jsonify({"message": "Email is required"}), 400
-
-    unique_key = generate_unique_key()
-    encrypted_key = encrypt_key(unique_key)
-
     try:
+        if mongo is None:
+            logger.error("Database not initialized")
+            return jsonify({"message": "Database not initialized"}), 500
+
+        data = request.get_json()
+        if not data:
+            return jsonify({"message": "No data provided"}), 400
+
+        email = data.get('email')
+        name = data.get('name')
+
+        if not email:
+            return jsonify({"message": "Email is required"}), 400
+
+        unique_key = generate_unique_key()
+        encrypted_key = encrypt_key(unique_key)
+
         mongo.db.users.update_one(
             {"email": email},
-            {"$set": {"unique_key": encrypted_key, "name": name}, "$setOnInsert": {"connected_users": [], "pending_requests": []}},
+            {
+                "$set": {
+                    "unique_key": encrypted_key,
+                    "name": name
+                },
+                "$setOnInsert": {
+                    "connected_users": [],
+                    "pending_requests": []
+                }
+            },
             upsert=True
         )
-        return jsonify({"message": "Key generated successfully", "key": unique_key}), 200
+        return jsonify({
+            "message": "Key generated successfully",
+            "key": unique_key
+        }), 200
     except Exception as e:
-        return jsonify({"message": f"Database error: {e}"}), 500
+        logger.error(f"Key generation error: {str(e)}")
+        return jsonify({"message": "Internal server error"}), 500
 
 @key_blueprint.route('/connect_users', methods=['POST'])
 def connect_users():
     """Send a connection request to another user."""
-    data = request.get_json()
-    user1_key = data.get("user1_key")
-    user2_key = data.get("user2_key")
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"message": "No data provided"}), 400
 
-    if not user1_key or not user2_key:
-        return jsonify({"message": "Both keys are required"}), 400
+        user1_key = data.get("user1_key")
+        user2_key = data.get("user2_key")
 
-    # Find users by their keys
-    user1 = mongo.db.users.find_one({"unique_key": encrypt_key(user1_key)})
-    user2 = mongo.db.users.find_one({"unique_key": encrypt_key(user2_key)})
+        if not user1_key or not user2_key:
+            return jsonify({"message": "Both keys are required"}), 400
 
-    if not user1 or not user2:
-        return jsonify({"message": "Invalid key(s)"}), 401
+        # Find users by their keys
+        user1 = mongo.db.users.find_one({"unique_key": encrypt_key(user1_key)})
+        user2 = mongo.db.users.find_one({"unique_key": encrypt_key(user2_key)})
 
-    user1_email = user1["email"]
-    user2_email = user2["email"]
+        if not user1 or not user2:
+            return jsonify({"message": "Invalid key(s)"}), 401
 
-    # Check if already connected
-    if user2_email in user1.get("connected_users", []):
-        return jsonify({"message": "Users are already connected"}), 200
+        user1_email = user1["email"]
+        user2_email = user2["email"]
 
-    # Check if request already exists
-    if user1_email in user2.get("pending_requests", []):
-        return jsonify({"message": "Request already sent"}), 200
+        # Check if already connected
+        if user2_email in user1.get("connected_users", []):
+            return jsonify({"message": "Users are already connected"}), 200
 
-    # Add to pending requests
-    mongo.db.users.update_one(
-        {"email": user2_email},
-        {"$addToSet": {"pending_requests": user1_email}}
-    )
-
-    return jsonify({"message": "Connection request sent!"}), 200
-
-@key_blueprint.route('/pending_requests/<user_key>', methods=['GET'])
-def get_pending_requests(user_key):
-    """Fetch pending connection requests for a user."""
-    user = mongo.db.users.find_one({"unique_key": encrypt_key(user_key)})
-    if not user:
-        return jsonify({"message": "User not found"}), 404
-
-    pending_emails = user.get("pending_requests", [])
-    requests = []
-    
-    for email in pending_emails:
-        requester = mongo.db.users.find_one({"email": email})
-        if requester:
-            requests.append({
-                "requester_email": email,
-                "requester_key": decrypt_key(requester.get("unique_key", "")),
-                "requester_name": requester.get("name", "Unknown")
-            })
-
-    return jsonify({"requests": requests}), 200
+        # Add to pending requests
+        mongo.db.users.update_one(
+            {"email": user2_email},
+            {"$addToSet": {"pending_requests": user1_email}}
+        )
+        return jsonify({"message": "Connection request sent"}), 200
+    except Exception as e:
+        logger.error(f"Connection error: {str(e)}")
+        return jsonify({"message": "Internal server error"}), 500
 
 @key_blueprint.route('/accept_request', methods=['POST'])
 def accept_request():
     """Accept a connection request."""
-    data = request.get_json()
-    user_key = data.get("user_key")
-    requester_key = data.get("requester_key")
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"message": "No data provided"}), 400
 
-    if not user_key or not requester_key:
-        return jsonify({"message": "Both keys are required"}), 400
+        user_key = data.get("user_key")
+        requester_email = data.get("requester_email")
 
-    user = mongo.db.users.find_one({"unique_key": encrypt_key(user_key)})
-    requester = mongo.db.users.find_one({"unique_key": encrypt_key(requester_key)})
+        if not user_key or not requester_email:
+            return jsonify({"message": "User key and requester email are required"}), 400
 
-    if not user or not requester:
-        return jsonify({"message": "Invalid key(s)"}), 401
+        user = mongo.db.users.find_one({"unique_key": encrypt_key(user_key)})
+        if not user:
+            return jsonify({"message": "Invalid user key"}), 401
 
-    user_email = user["email"]
-    requester_email = requester["email"]
-
-    if requester_email not in user.get("pending_requests", []):
-        return jsonify({"message": "No pending request from this user"}), 400
-
-    # Update both users' connected lists
-    mongo.db.users.update_one(
-        {"email": user_email},
-        {"$pull": {"pending_requests": requester_email}, "$push": {"connected_users": requester_email}}
-    )
-
-    mongo.db.users.update_one(
-        {"email": requester_email},
-        {"$push": {"connected_users": user_email}}
-    )
-
-    return jsonify({"message": "Connection request accepted!"}), 200
+        # Remove from pending and add to connected
+        mongo.db.users.update_one(
+            {"email": user["email"]},
+            {
+                "$pull": {"pending_requests": requester_email},
+                "$addToSet": {"connected_users": requester_email}
+            }
+        )
+        return jsonify({"message": "Request accepted"}), 200
+    except Exception as e:
+        logger.error(f"Accept request error: {str(e)}")
+        return jsonify({"message": "Internal server error"}), 500
 
 @key_blueprint.route('/reject_request', methods=['POST'])
 def reject_request():
     """Reject a connection request."""
-    data = request.get_json()
-    user_key = data.get("user_key")
-    requester_key = data.get("requester_key")
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"message": "No data provided"}), 400
 
-    if not user_key or not requester_key:
-        return jsonify({"message": "Both keys are required"}), 400
+        user_key = data.get("user_key")
+        requester_email = data.get("requester_email")
 
-    user = mongo.db.users.find_one({"unique_key": encrypt_key(user_key)})
-    requester = mongo.db.users.find_one({"unique_key": encrypt_key(requester_key)})
+        if not user_key or not requester_email:
+            return jsonify({"message": "User key and requester email are required"}), 400
 
-    if not user or not requester:
-        return jsonify({"message": "Invalid key(s)"}), 401
+        user = mongo.db.users.find_one({"unique_key": encrypt_key(user_key)})
+        if not user:
+            return jsonify({"message": "Invalid user key"}), 401
 
-    user_email = user["email"]
-    requester_email = requester["email"]
-
-    # Remove from pending requests
-    mongo.db.users.update_one(
-        {"email": user_email},
-        {"$pull": {"pending_requests": requester_email}}
-    )
-
-    return jsonify({"message": "Connection request rejected!"}), 200
-
-@key_blueprint.route('/disconnect', methods=['POST'])
-def disconnect():
-    """Disconnect from a user."""
-    data = request.get_json()
-    user_key = data.get("user_key")
-    other_key = data.get("other_key")
-
-    if not user_key or not other_key:
-        return jsonify({"message": "Both keys are required"}), 400
-
-    user = mongo.db.users.find_one({"unique_key": encrypt_key(user_key)})
-    other = mongo.db.users.find_one({"unique_key": encrypt_key(other_key)})
-
-    if not user or not other:
-        return jsonify({"message": "Invalid key(s)"}), 401
-
-    user_email = user["email"]
-    other_email = other["email"]
-
-    # Remove from both users' connected lists
-    mongo.db.users.update_one(
-        {"email": user_email},
-        {"$pull": {"connected_users": other_email}}
-    )
-
-    mongo.db.users.update_one(
-        {"email": other_email},
-        {"$pull": {"connected_users": user_email}}
-    )
-
-    return jsonify({"message": "Disconnected successfully!"}), 200
-
-@key_blueprint.route('/logout', methods=['POST'])
-def logout():
-    """Handle user logout by disconnecting all connections."""
-    data = request.get_json()
-    user_key = data.get("user_key")
-
-    if not user_key:
-        return jsonify({"message": "User key is required"}), 400
-
-    user = mongo.db.users.find_one({"unique_key": encrypt_key(user_key)})
-    if not user:
-        return jsonify({"message": "User not found"}), 404
-
-    user_email = user["email"]
-    connected_emails = user.get("connected_users", [])
-
-    # Remove user from all connected users' lists
-    for email in connected_emails:
         mongo.db.users.update_one(
-            {"email": email},
-            {"$pull": {"connected_users": user_email}}
+            {"email": user["email"]},
+            {"$pull": {"pending_requests": requester_email}}
         )
+        return jsonify({"message": "Request rejected"}), 200
+    except Exception as e:
+        logger.error(f"Reject request error: {str(e)}")
+        return jsonify({"message": "Internal server error"}), 500
 
-    # Clear user's connected users list
-    mongo.db.users.update_one(
-        {"email": user_email},
-        {"$set": {"connected_users": []}}
-    )
+@key_blueprint.route('/get_connected_users', methods=['POST'])
+def get_connected_users():
+    """Get list of connected users."""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"message": "No data provided"}), 400
 
-    return jsonify({"message": "Logged out and disconnected from all users"}), 200
+        user_key = data.get("user_key")
+        if not user_key:
+            return jsonify({"message": "User key is required"}), 400
 
-@key_blueprint.route('/check_connection/<user1_key>/<user2_key>', methods=['GET'])
-def check_connection(user1_key, user2_key):
-    """Check if two users are connected."""
-    user1 = mongo.db.users.find_one({"unique_key": encrypt_key(user1_key)})
-    user2 = mongo.db.users.find_one({"unique_key": encrypt_key(user2_key)})
+        user = mongo.db.users.find_one({"unique_key": encrypt_key(user_key)})
+        if not user:
+            return jsonify({"message": "Invalid user key"}), 401
 
-    if not user1 or not user2:
-        return jsonify({"message": "Invalid key(s)", "connected": False}), 401
+        connected_users = user.get("connected_users", [])
+        return jsonify({"connected_users": connected_users}), 200
+    except Exception as e:
+        logger.error(f"Get connected users error: {str(e)}")
+        return jsonify({"message": "Internal server error"}), 500
 
-    user1_email = user1["email"]
-    user2_email = user2["email"]
+@key_blueprint.route('/get_pending_requests', methods=['POST'])
+def get_pending_requests():
+    """Get list of pending connection requests."""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"message": "No data provided"}), 400
 
-    connected = user2_email in user1.get("connected_users", [])
-    return jsonify({"connected": connected}), 200
+        user_key = data.get("user_key")
+        if not user_key:
+            return jsonify({"message": "User key is required"}), 400
 
-@key_blueprint.route('/get_connected_users/<user_key>', methods=['GET'])
-def get_connected_users(user_key):
-    """Get list of connected users with their details."""
-    user = mongo.db.users.find_one({"unique_key": encrypt_key(user_key)})
-    if not user:
-        return jsonify({"message": "User not found"}), 404
+        user = mongo.db.users.find_one({"unique_key": encrypt_key(user_key)})
+        if not user:
+            return jsonify({"message": "Invalid user key"}), 401
 
-    connected_emails = user.get("connected_users", [])
-    connected_users = []
-    
-    for email in connected_emails:
-        connected_user = mongo.db.users.find_one({"email": email})
-        if connected_user:
-            connected_users.append({
-                "email": email,
-                "name": connected_user.get("name", "Unknown"),
-                "key": decrypt_key(connected_user.get("unique_key", ""))
-            })
-
-    return jsonify({"connected_users": connected_users}), 200
+        pending_requests = user.get("pending_requests", [])
+        return jsonify({"pending_requests": pending_requests}), 200
+    except Exception as e:
+        logger.error(f"Get pending requests error: {str(e)}")
+        return jsonify({"message": "Internal server error"}), 500
