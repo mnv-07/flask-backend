@@ -1,8 +1,8 @@
 from flask import Flask
 from flask_cors import CORS
-from flask_backend_main.api.auth import auth_blueprint, init_mongo
-from flask_backend_main.service.unique_key_service import key_blueprint, init_mongo as init_mongo_key
-from flask_backend_main.api.connections import connections_bp
+from api.auth import auth_blueprint, init_mongo
+from service.unique_key_service import key_blueprint, init_mongo as init_mongo_key
+from api.connections import connections_bp
 import os
 
 def create_app():
