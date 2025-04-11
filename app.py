@@ -2,6 +2,7 @@ from flask import Flask
 from flask_cors import CORS
 from api.auth import auth_blueprint, init_mongo
 from api.connections import connections_bp
+from api.files import files_bp, init_mongo as init_files_mongo
 from service.user_service import UserService
 import os
 
@@ -17,6 +18,7 @@ def create_app():
     
     # Initialize MongoDB
     init_mongo(app)
+    init_files_mongo(app)
     
     # Initialize UserService
     user_service = UserService()
@@ -35,6 +37,7 @@ def create_app():
     # Register blueprints
     app.register_blueprint(auth_blueprint, url_prefix='/api')
     app.register_blueprint(connections_bp, url_prefix='/api')
+    app.register_blueprint(files_bp, url_prefix='/api')
 
     return app
 
