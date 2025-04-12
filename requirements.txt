@@ -14,3 +14,6 @@ python-engineio
 python-socketio
 requests
 PyJWT
+cloudinary
+python-jose
+bcrypt
