@@ -23,18 +23,32 @@ def create_app():
     user_service.init_mongo(app)
     app.user_service = user_service
 
-    # Configure CORS
+    # Configure CORS with specific origins
     CORS(app, resources={
-        r"/*": {
-            "origins": ["*"],
+        r"/api/*": {
+            "origins": [
+                "http://localhost:5173",  # Vite dev server
+                "http://localhost:3000",  # Alternative dev port
+                "http://127.0.0.1:5173",
+                "http://127.0.0.1:3000",
+            ],
             "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-            "allow_headers": ["Content-Type", "Authorization"]
+            "allow_headers": ["Content-Type", "Authorization"],
+            "supports_credentials": True
         }
     })
 
     # Register blueprints
     app.register_blueprint(auth_blueprint, url_prefix='/api')
     app.register_blueprint(connections_bp, url_prefix='/api')
+
+    @app.after_request
+    def after_request(response):
+        response.headers.add('Access-Control-Allow-Origin', 'http://localhost:5173')
+        response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+        response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+        response.headers.add('Access-Control-Allow-Credentials', 'true')
+        return response
 
     return app
 
